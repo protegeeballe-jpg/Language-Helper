@@ -1,43 +1,66 @@
-import { pipeline } from '@huggingface/transformers';
+import { pipeline, env } from '@huggingface/transformers';
 
-export class LocalWhisperTranslator {
-  private pipe: any = null;
-  private isInitializing: boolean = false;
+// Configure environment for browser execution
+env.allowLocalModels = false;
+env.useBrowserCache = true;
 
-  async loadModel(onProgress?: (progress: number) => void) {
-    if (this.pipe) return;
-    if (this.isInitializing) return;
+class WhisperEngine {
+  private transcriber: any = null;
+  private isInitializing = false;
 
-    this.isInitializing = true;
-    console.log("Loading local Whisper model into browser memory...");
-
-    // Loads local quantized Whisper model for speech translation
-    this.pipe = await pipeline('automatic-speech-recognition', 'onnx-community/whisper-tiny', {
-      dtype: 'fp32',
-      progress_callback: (info: any) => {
-        if (info.status === 'progress' && onProgress) {
-          onProgress(Math.round(info.progress || 0));
-        }
+  async loadModel(onProgress?: (progress: any) => void) {
+    if (this.transcriber) return;
+    if (this.isInitializing) {
+      // Wait if another call is already loading it
+      while (this.isInitializing) {
+        await new Promise((resolve) => setTimeout(resolve, 100));
       }
-    });
+      return;
+    }
 
-    this.isInitializing = false;
-    console.log("Whisper AI loaded successfully!");
+    try {
+      this.isInitializing = true;
+      console.log('Loading Whisper AI model...');
+
+      // Load whisper-tiny optimized for browser web environment
+      this.transcriber = await pipeline(
+        'automatic-speech-recognition',
+        'Xenova/whisper-tiny',
+        {
+          device: 'wasm', // Safe, reliable fallback for all devices including iPads
+          progress_callback: onProgress,
+        }
+      );
+      console.log('Whisper AI model loaded successfully!');
+    } catch (error) {
+      console.error('Failed to load Whisper model:', error);
+      throw error;
+    } finally {
+      this.isInitializing = false;
+    }
   }
 
   async translateAudio(audioBuffer: Float32Array): Promise<string> {
-    if (!this.pipe) {
+    if (!this.transcriber) {
       await this.loadModel();
     }
 
-    // Direct audio translation from Tagalog speech to English text
-    const result = await this.pipe(audioBuffer, {
-      language: 'tagalog',
-      task: 'translate',
-    });
+    try {
+      // Run local speech recognition and translate Tagalog to English
+      const output = await this.transcriber(audioBuffer, {
+        chunk_length_s: 30,
+        stride_length_s: 5,
+        language: 'tagalog',
+        task: 'translate', // Translates Tagalog speech directly into written English
+        return_timestamps: false,
+      });
 
-    return Array.isArray(result) ? result[0].text : result.text;
+      return output?.text ? output.text.trim() : '';
+    } catch (error) {
+      console.error('Inference error during translation:', error);
+      return '';
+    }
   }
 }
 
-export const whisperEngine = new LocalWhisperTranslator();
+export const whisperEngine = new WhisperEngine();
