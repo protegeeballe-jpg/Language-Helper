@@ -3,6 +3,7 @@ import { pipeline, env } from '@huggingface/transformers';
 env.allowLocalModels = false;
 env.useBrowserCache = true;
 
+// Force single-threaded mode for mobile browser stability[cite: 15]
 if (env.backends?.onnx?.wasm) {
   env.backends.onnx.wasm.numThreads = 1;
 }
@@ -22,6 +23,7 @@ class WhisperEngine {
 
     try {
       this.isInitializing = true;
+      console.log('Loading Whisper AI model...');
       this.transcriber = await pipeline(
         'automatic-speech-recognition',
         'Xenova/whisper-tiny',
@@ -30,6 +32,7 @@ class WhisperEngine {
           progress_callback: onProgress,
         }
       );
+      console.log('Whisper AI model loaded successfully!');
     } catch (error) {
       console.error('Failed to load Whisper model:', error);
       throw error;
@@ -50,15 +53,19 @@ class WhisperEngine {
         language: 'tagalog',
         task: 'translate',
         return_timestamps: false,
-        temperature: 0.0,
-        no_speech_threshold: 0.6,
-        compression_ratio_threshold: 2.4,
+        temperature: 0.0, // Forces deterministic output, killing hallucinations[cite: 7]
+        no_speech_threshold: 0.6, // Ignores low-confidence segments[cite: 7]
+        compression_ratio_threshold: 2.4, // Drops repetitive loops[cite: 7]
       });
 
-      const text = output?.text ? output.text.trim() : '';
+      let text = output?.text ? output.text.trim() : '';
+
+      // CRITICAL: Strip out Whisper's non-speech bracket tags ([laughter], [music], etc.)[cite: 27]
+      text = text.replace(/\[.*?\]|\(.*?\)/g, '').trim();
+
       const lowerText = text.toLowerCase();
-      
       if (
+        !text ||
         lowerText.includes('thank you for watching') ||
         lowerText.includes('please subscribe') ||
         lowerText.includes('subtitles by')
