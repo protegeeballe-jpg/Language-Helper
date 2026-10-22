@@ -4,21 +4,48 @@ export class AudioRecorder {
   private source: MediaStreamAudioSourceNode | null = null;
   private processor: ScriptProcessorNode | null = null;
   private onAudioChunk: (buffer: Float32Array) => void;
-  private audioQueue: Float32Array[] = [];
+  
+  private activeBuffer: Float32Array[] = [];
   private totalSamples = 0;
-  // ~4 seconds of speech per chunk for optimal Whisper processing speed & accuracy
-  private targetSamples = 64000; 
+  private isSpeaking = false;
+  private silenceCounter = 0;
+  
+  private silenceLimit = 6; // ~1.5 seconds of pause to mark end of sentence
+  private minSpeechSamples = 16000; // Minimum 1 second of speech required
 
   constructor(onAudioChunk: (buffer: Float32Array) => void) {
     this.onAudioChunk = onAudioChunk;
   }
 
+  // Resamples hardware audio (44.1kHz / 48kHz) precisely to Whisper's required 16kHz
+  private resampleBuffer(buffer: Float32Array, inputSampleRate: number): Float32Array {
+    if (inputSampleRate === 16000) return buffer;
+    
+    const ratio = inputSampleRate / 16000;
+    const newLength = Math.round(buffer.length / ratio);
+    const result = new Float32Array(newLength);
+    
+    let offsetResult = 0;
+    let offsetBuffer = 0;
+    while (offsetResult < result.length) {
+      let nextOffsetBuffer = Math.round((offsetResult + 1) * ratio);
+      let accum = 0;
+      let count = 0;
+      for (let i = offsetBuffer; i < nextOffsetBuffer && i < buffer.length; i++) {
+        accum += buffer[i];
+        count++;
+      }
+      result[offsetResult] = count > 0 ? accum / count : 0;
+      offsetResult++;
+      offsetBuffer = nextOffsetBuffer;
+    }
+    return result;
+  }
+
   async start() {
-    // Request clean, high-quality mono audio directly from the device microphone
     this.stream = await navigator.mediaDevices.getUserMedia({
       audio: {
         channelCount: 1,
-        sampleRate: 16000,
         echoCancellation: true,
         noiseSuppression: true,
         autoGainControl: true,
@@ -26,11 +53,14 @@ export class AudioRecorder {
     });
 
     const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
-    this.audioContext = new AudioContextClass({ sampleRate: 16000 });
+    this.audioContext = new AudioContextClass(); // Let browser use native rate, we resample dynamically!
 
     if (this.audioContext.state === 'suspended') {
       await this.audioContext.resume();
     }
+
+    const actualSampleRate = this.audioContext.sampleRate;
+    console.log(`AudioContext active sample rate: ${actualSampleRate}Hz (Resampling to 16000Hz)`);
 
     this.source = this.audioContext.createMediaStreamSource(this.stream);
     this.processor = this.audioContext.createScriptProcessor(4096, 1, 1);
@@ -38,40 +68,54 @@ export class AudioRecorder {
     this.processor.onaudioprocess = (e) => {
       const inputData = e.inputBuffer.getChannelData(0);
 
-      // Voice Activity Detection (VAD) filter: calculates energy to ignore silence
+      // Calculate RMS Volume for Voice Activity Detection
       let sumSquares = 0;
       for (let i = 0; i < inputData.length; i++) {
         sumSquares += inputData[i] * inputData[i];
       }
       const rms = Math.sqrt(sumSquares / inputData.length);
 
-      // Threshold set to ignore ambient room noise while capturing speaking voice clearly
-      if (rms < 0.012) {
-        return; 
-      }
+      const isVoice = rms > 0.012;
 
-      const chunk = new Float32Array(inputData);
-      this.audioQueue.push(chunk);
-      this.totalSamples += chunk.length;
-
-      if (this.totalSamples >= this.targetSamples) {
-        const mergedBuffer = new Float32Array(this.totalSamples);
-        let offset = 0;
-        for (const queuedChunk of this.audioQueue) {
-          mergedBuffer.set(queuedChunk, offset);
-          offset += queuedChunk.length;
+      if (isVoice) {
+        if (!this.isSpeaking) {
+          this.isSpeaking = true;
         }
+        this.silenceCounter = 0;
+        
+        // Resample raw chunk to 16kHz immediately
+        const resampledChunk = this.resampleBuffer(inputData, actualSampleRate);
+        this.activeBuffer.push(resampledChunk);
+        this.totalSamples += resampledChunk.length;
+      } else if (this.isSpeaking) {
+        this.silenceCounter++;
+        const resampledChunk = this.resampleBuffer(inputData, actualSampleRate);
+        this.activeBuffer.push(resampledChunk);
+        this.totalSamples += resampledChunk.length;
 
-        this.audioQueue = [];
-        this.totalSamples = 0;
-        this.onAudioChunk(mergedBuffer);
+        if (this.silenceCounter >= this.silenceLimit) {
+          if (this.totalSamples >= this.minSpeechSamples) {
+            const completeSentenceBuffer = new Float32Array(this.totalSamples);
+            let offset = 0;
+            for (const c of this.activeBuffer) {
+              completeSentenceBuffer.set(c, offset);
+              offset += c.length;
+            }
+
+            this.onAudioChunk(completeSentenceBuffer);
+          }
+
+          this.activeBuffer = [];
+          this.totalSamples = 0;
+          this.isSpeaking = false;
+          this.silenceCounter = 0;
+        }
       }
     };
 
     this.source.connect(this.processor);
     this.processor.connect(this.audioContext.destination);
 
-    // Prevent iOS Safari garbage collection
     (window as any).__timekettleAudioFix = {
       stream: this.stream,
       context: this.audioContext,
@@ -92,8 +136,9 @@ export class AudioRecorder {
     }
     this.stream = null;
     this.audioContext = null;
-    this.audioQueue = [];
+    this.activeBuffer = [];
     this.totalSamples = 0;
+    this.isSpeaking = false;
     delete (window as any).__timekettleAudioFix;
   }
 }
