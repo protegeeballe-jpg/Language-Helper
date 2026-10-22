@@ -6,8 +6,7 @@ export class AudioRecorder {
   private onAudioChunk: (buffer: Float32Array) => void;
   private audioQueue: Float32Array[] = [];
   private totalSamples = 0;
-  // Target ~5 seconds of audio per translation chunk (16000 Hz * 5s = 80,000 samples)
-  private targetSamples = 80000; 
+  private targetSamples = 80000; // ~5 seconds at 16kHz
 
   constructor(onAudioChunk: (buffer: Float32Array) => void) {
     this.onAudioChunk = onAudioChunk;
@@ -26,7 +25,6 @@ export class AudioRecorder {
     const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
     this.audioContext = new AudioContextClass({ sampleRate: 16000 });
 
-    // CRITICAL for iOS Safari: AudioContext starts suspended and must be resumed on user gesture
     if (this.audioContext.state === 'suspended') {
       await this.audioContext.resume();
     }
@@ -41,7 +39,6 @@ export class AudioRecorder {
       this.audioQueue.push(chunk);
       this.totalSamples += chunk.length;
 
-      // Once we have accumulated ~5 seconds of speech, send it to Whisper
       if (this.totalSamples >= this.targetSamples) {
         const mergedBuffer = new Float32Array(this.totalSamples);
         let offset = 0;
@@ -50,17 +47,21 @@ export class AudioRecorder {
           offset += queuedChunk.length;
         }
 
-        // Reset queue for the next batch
         this.audioQueue = [];
         this.totalSamples = 0;
-
-        // Pass the accumulated audio buffer to translation
         this.onAudioChunk(mergedBuffer);
       }
     };
 
     this.source.connect(this.processor);
     this.processor.connect(this.audioContext.destination);
+
+    // CRITICAL: Prevent iOS Safari garbage collection by pinning to window
+    (window as any).__globalAudioFix = {
+      stream: this.stream,
+      context: this.audioContext,
+      processor: this.processor
+    };
   }
 
   stop() {
@@ -78,5 +79,6 @@ export class AudioRecorder {
     this.audioContext = null;
     this.audioQueue = [];
     this.totalSamples = 0;
+    delete (window as any).__globalAudioFix;
   }
 }
