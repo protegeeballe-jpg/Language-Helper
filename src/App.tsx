@@ -2,120 +2,134 @@ import React, { useState, useEffect, useRef } from 'react';
 import { whisperEngine } from './whisper/engine';
 import { AudioRecorder } from './audio/recorder';
 
-interface Entry {
+interface TranslationPair {
   id: string;
-  text: string;
+  translation: string;
   time: string;
 }
 
 export default function App() {
   const [isListening, setIsListening] = useState(false);
-  const [transcripts, setTranscripts] = useState<Entry[]>([]);
-  const [hasStarted, setHasStarted] = useState(false);
-  const [statusMessage, setStatusMessage] = useState('Tap Anywhere to Start');
+  const [entries, setEntries] = useState<TranslationPair[]>([]);
+  const [statusText, setStatusText] = useState('Ready for Conversation');
+  const [isModelLoading, setIsModelLoading] = useState(false);
   const recorderRef = useRef<AudioRecorder | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [transcripts]);
+  }, [entries]);
 
   const handleAudioChunk = async (audioBuffer: Float32Array) => {
     try {
-      setStatusMessage('Translating Tagalog...');
-      const translation = await whisperEngine.translateAudio(audioBuffer);
+      setStatusText('Translating speech...');
+      const resultText = await whisperEngine.translateAudio(audioBuffer);
 
-      if (translation && translation.trim().length > 0) {
-        setTranscripts((prev) => [
+      if (resultText && resultText.length > 2) {
+        setEntries((prev) => [
           ...prev,
           {
             id: Date.now().toString(),
-            text: translation,
+            translation: resultText,
             time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
           },
         ]);
       }
-      setStatusMessage('Listening for Tagalog...');
-    } catch (error) {
-      console.error('Translation error:', error);
-      setStatusMessage('Listening...');
-    }
-  };
-
-  const startListening = async () => {
-    try {
-      setHasStarted(true);
-      setStatusMessage('Initializing Local AI Engine...');
-
-      await whisperEngine.loadModel();
-
-      const recorder = new AudioRecorder(handleAudioChunk);
-      await recorder.start();
-      recorderRef.current = recorder;
-
-      setIsListening(true);
-      setStatusMessage('Listening for Tagalog...');
+      setStatusText('Listening live...');
     } catch (err) {
-      console.error('Microphone access denied or error:', err);
-      setStatusMessage('Microphone access required');
-      alert('Please allow microphone access so the app can hear nearby conversations.');
+      console.error('Translation processing error:', err);
+      setStatusText('Listening live...');
     }
   };
 
-  const stopListening = () => {
-    if (recorderRef.current) {
-      recorderRef.current.stop();
-      recorderRef.current = null;
+  const toggleListening = async () => {
+    if (isListening) {
+      if (recorderRef.current) {
+        recorderRef.current.stop();
+        recorderRef.current = null;
+      }
+      setIsListening(false);
+      setStatusText('Paused');
+    } else {
+      try {
+        setIsModelLoading(true);
+        setStatusText('Loading AI Interpreter...');
+
+        // Ensure Whisper model is cached & ready
+        await whisperEngine.loadModel((progress) => {
+          if (progress?.status === 'downloading') {
+            const pct = progress.progress ? Math.round(progress.progress) : 0;
+            setStatusText(`Downloading Engine: ${pct}%`);
+          }
+        });
+
+        setIsModelLoading(false);
+        setStatusText('Activating Microphone...');
+        
+        const recorder = new AudioRecorder(handleAudioChunk);
+        await recorder.start();
+        recorderRef.current = recorder;
+
+        setIsListening(true);
+        setStatusText('Listening live...');
+      } catch (err: any) {
+        setIsModelLoading(false);
+        setIsListening(false);
+        console.error('Mic initialization failed:', err);
+        alert('Microphone or AI initialization error: ' + (err.message || err));
+        setStatusText('Error - Tap to Retry');
+      }
     }
-    setIsListening(false);
-    setStatusMessage('Paused');
   };
 
   return (
-    <div style={styles.container} onClick={!hasStarted ? startListening : undefined}>
+    <div style={styles.container}>
+      {/* Top Hardware-Style Status Bar */}
       <header style={styles.header}>
-        <h1 style={styles.title}>Language Helper</h1>
-        <span style={styles.badge}>{statusMessage}</span>
+        <div style={styles.brandGroup}>
+          <div style={{ ...styles.pulseDot, backgroundColor: isListening ? '#22c55e' : '#64748b' }} />
+          <h1 style={styles.title}>Timekettle Mode</h1>
+        </div>
+        <span style={styles.statusBadge}>{statusText}</span>
       </header>
 
+      {/* Main Translation Stream Feed */}
       <main style={styles.feed}>
-        {transcripts.length === 0 ? (
-          <div style={styles.emptyState}>
-            {!hasStarted ? (
-              <div style={styles.welcomeBox}>
-                <p style={{ fontSize: '1.25rem', fontWeight: 'bold', marginBottom: '1rem' }}>
-                  Welcome to Language Helper 🕊️
-                </p>
-                <p>Tap anywhere on the screen to start live local Tagalog-to-English translation.</p>
-              </div>
-            ) : (
-              <p>Listening... Speak Tagalog into your mic, and the English translation will appear here!</p>
-            )}
+        {entries.length === 0 ? (
+          <div style={styles.welcomeCard}>
+            <h2 style={{ fontSize: '1.35rem', marginBottom: '0.5qrem', color: '#f8fafc' }}>
+              Tagalog ➔ English Interpreter
+            </h2>
+            <p style={{ color: '#94a3b8', lineHeight: 1.6, margin: 0 }}>
+              Powered by local offline Whisper AI. Tap the button below, place the iPad nearby, and speak naturally in Tagalog.
+            </p>
           </div>
         ) : (
-          transcripts.map((entry) => (
-            <div key={entry.id} style={styles.card}>
-              <span style={styles.timestamp}>{entry.time}</span>
-              <p style={styles.text}>{entry.text}</p>
+          entries.map((item) => (
+            <div key={item.id} style={styles.translationCard}>
+              <div style={styles.cardHeader}>
+                <span style={styles.tagLabel}>ENGLISH TRANSLATION</span>
+                <span style={styles.timestamp}>{item.time}</span>
+              </div>
+              <p style={styles.translationText}>{item.translation}</p>
             </div>
           ))
         )}
         <div ref={bottomRef} />
       </main>
 
-      <footer style={styles.controls}>
+      {/* Bottom Control Bar */}
+      <footer style={styles.footer}>
         <button
-          onClick={(e) => {
-            e.stopPropagation();
-            if (!isListening) startListening();
-            else stopListening();
-          }}
+          onClick={toggleListening}
+          disabled={isModelLoading}
           style={{
-            ...styles.actionButton,
-            backgroundColor: isListening ? '#dc2626' : '#2563eb',
+            ...styles.mainButton,
+            backgroundColor: isListening ? '#ef4444' : '#2563eb',
+            opacity: isModelLoading ? 0.7 : 1,
           }}
         >
-          {isListening ? 'Pause' : 'Start Listening'}
+          {isModelLoading ? 'Initializing...' : isListening ? 'Stop Listening' : 'Start Live Translation'}
         </button>
       </footer>
     </div>
@@ -127,63 +141,89 @@ const styles: Record<string, React.CSSProperties> = {
     display: 'flex',
     flexDirection: 'column',
     height: '100vh',
-    backgroundColor: '#0f172a',
+    backgroundColor: '#090d16',
     color: '#f8fafc',
-    fontFamily: 'system-ui, sans-serif',
-    cursor: 'pointer',
+    fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
   },
   header: {
-    padding: '1rem',
+    padding: '1rem 1.25rem',
     display: 'flex',
     justifyContent: 'space-between',
     alignItems: 'center',
+    backgroundColor: '#0f172a',
     borderBottom: '1px solid #1e293b',
   },
-  title: { fontSize: '1.25rem', fontWeight: 'bold', margin: 0 },
-  badge: {
+  brandGroup: { display: 'flex', alignItems: 'center', gap: '0.75rem' },
+  pulseDot: {
+    width: '10px',
+    height: '10px',
+    borderRadius: '50%',
+    boxShadow: '0 0 8px currentColor',
+  },
+  title: { fontSize: '1.1rem', fontWeight: 600, margin: 0 },
+  statusBadge: {
     fontSize: '0.75rem',
-    padding: '0.25rem 0.5rem',
+    padding: '0.35rem 0.75rem',
     borderRadius: '9999px',
     backgroundColor: '#1e293b',
     color: '#38bdf8',
+    fontWeight: 500,
   },
   feed: {
     flex: 1,
     overflowY: 'auto',
-    padding: '1.5rem',
+    padding: '1.25rem',
     display: 'flex',
     flexDirection: 'column',
-    gap: '0.75rem',
+    gap: '1rem',
   },
-  card: {
+  welcomeCard: {
     backgroundColor: '#1e293b',
-    padding: '1rem',
-    borderRadius: '0.75rem',
-    borderLeft: '4px solid #38bdf8',
-  },
-  timestamp: { fontSize: '0.75rem', color: '#94a3b8', display: 'block', marginBottom: '0.25rem' },
-  text: { fontSize: '1.25rem', margin: 0, lineHeight: 1.5 },
-  emptyState: { textAlign: 'center', color: '#94a3b8', marginTop: '6rem', padding: '0 2rem' },
-  welcomeBox: {
-    backgroundColor: '#1e293b',
-    padding: '2rem',
+    padding: '2rem 1.5rem',
     borderRadius: '1rem',
     border: '1px solid #334155',
+    textAlign: 'center',
+    marginTop: '4rem',
   },
-  controls: {
-    padding: '1.5rem',
+  translationCard: {
+    backgroundColor: '#1e293b',
+    padding: '1.25rem',
+    borderRadius: '0.85rem',
+    borderLeft: '4px solid #38bdf8',
+    boxShadow: '0 4px 12px rgba(0, 0, 0, 0.3)',
+  },
+  cardHeader: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: '0.5rem',
+  },
+  tagLabel: {
+    fontSize: '0.65rem',
+    fontWeight: 700,
+    letterSpacing: '0.05em',
+    color: '#38bdf8',
+  },
+  timestamp: { fontSize: '0.7rem', color: '#64748b' },
+  translationText: { fontSize: '1.35rem', fontWeight: 500, margin: 0, lineHeight: 1.5, color: '#f1f5f9' },
+  footer: {
+    padding: '1.25rem',
+    backgroundColor: '#0f172a',
+    borderTop: '1px solid #1e293b',
     display: 'flex',
     justifyContent: 'center',
-    borderTop: '1px solid #1e293b',
   },
-  actionButton: {
-    padding: '0.75rem 2rem',
+  mainButton: {
+    width: '100%',
+    maxWidth: '400px',
+    padding: '1rem',
     borderRadius: '9999px',
     border: 'none',
     color: '#fff',
     fontWeight: 'bold',
-    fontSize: '1rem',
+    fontSize: '1.05rem',
     cursor: 'pointer',
-    boxShadow: '0 4px 14px rgba(0,0,0,0.4)',
+    boxShadow: '0 4px 16px rgba(37, 99, 235, 0.4)',
+    transition: 'transform 0.1s ease',
   },
 };

@@ -6,19 +6,22 @@ export class AudioRecorder {
   private onAudioChunk: (buffer: Float32Array) => void;
   private audioQueue: Float32Array[] = [];
   private totalSamples = 0;
-  private targetSamples = 80000; // ~5 seconds at 16kHz
+  // ~4 seconds of speech per chunk for optimal Whisper processing speed & accuracy
+  private targetSamples = 64000; 
 
   constructor(onAudioChunk: (buffer: Float32Array) => void) {
     this.onAudioChunk = onAudioChunk;
   }
 
   async start() {
+    // Request clean, high-quality mono audio directly from the device microphone
     this.stream = await navigator.mediaDevices.getUserMedia({
       audio: {
         channelCount: 1,
         sampleRate: 16000,
         echoCancellation: true,
         noiseSuppression: true,
+        autoGainControl: true,
       },
     });
 
@@ -35,15 +38,15 @@ export class AudioRecorder {
     this.processor.onaudioprocess = (e) => {
       const inputData = e.inputBuffer.getChannelData(0);
 
-      // RMS Volume Calculation to detect actual speech vs silence/room noise
+      // Voice Activity Detection (VAD) filter: calculates energy to ignore silence
       let sumSquares = 0;
       for (let i = 0; i < inputData.length; i++) {
         sumSquares += inputData[i] * inputData[i];
       }
       const rms = Math.sqrt(sumSquares / inputData.length);
 
-      // If audio is below this volume threshold, it's silence/noise—skip it!
-      if (rms < 0.015) {
+      // Threshold set to ignore ambient room noise while capturing speaking voice clearly
+      if (rms < 0.012) {
         return; 
       }
 
@@ -68,7 +71,8 @@ export class AudioRecorder {
     this.source.connect(this.processor);
     this.processor.connect(this.audioContext.destination);
 
-    (window as any).__globalAudioFix = {
+    // Prevent iOS Safari garbage collection
+    (window as any).__timekettleAudioFix = {
       stream: this.stream,
       context: this.audioContext,
       processor: this.processor
@@ -90,6 +94,6 @@ export class AudioRecorder {
     this.audioContext = null;
     this.audioQueue = [];
     this.totalSamples = 0;
-    delete (window as any).__globalAudioFix;
+    delete (window as any).__timekettleAudioFix;
   }
 }
