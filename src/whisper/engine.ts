@@ -3,8 +3,10 @@ import { pipeline, env } from '@huggingface/transformers';
 env.allowLocalModels = false;
 env.useBrowserCache = true;
 
+// CRITICAL FIX: Explicitly direct mobile browsers & Vite to the CDN for WASM binaries
 if (env.backends?.onnx?.wasm) {
   env.backends.onnx.wasm.numThreads = 1;
+  env.backends.onnx.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.3.3/dist/';
 }
 
 class WhisperEngine {
@@ -22,6 +24,8 @@ class WhisperEngine {
 
     try {
       this.isInitializing = true;
+      console.log('Loading Whisper AI model from CDN...');
+
       this.transcriber = await pipeline(
         'automatic-speech-recognition',
         'Xenova/whisper-tiny',
@@ -30,6 +34,7 @@ class WhisperEngine {
           progress_callback: onProgress,
         }
       );
+      console.log('Whisper AI model loaded successfully!');
     } catch (error) {
       console.error('Failed to load Whisper model:', error);
       throw error;
@@ -50,15 +55,14 @@ class WhisperEngine {
         language: 'tagalog',
         task: 'translate',
         return_timestamps: false,
-        temperature: 0.0, // Forces deterministic output, killing hallucinations
-        no_speech_threshold: 0.6, // Ignores low-confidence segments
-        compression_ratio_threshold: 2.4, // Drops repetitive loops
+        temperature: 0.0,
+        no_speech_threshold: 0.6,
+        compression_ratio_threshold: 2.4,
       });
 
       const text = output?.text ? output.text.trim() : '';
-      
-      // Safety filter for known Whisper boilerplate hallucinations
       const lowerText = text.toLowerCase();
+      
       if (
         lowerText.includes('thank you for watching') ||
         lowerText.includes('please subscribe') ||
