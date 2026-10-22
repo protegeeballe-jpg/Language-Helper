@@ -3,10 +3,9 @@ import { pipeline, env } from '@huggingface/transformers';
 env.allowLocalModels = false;
 env.useBrowserCache = true;
 
-// CRITICAL FIX: Explicitly direct mobile browsers & Vite to the CDN for WASM binaries
+// Force single-threaded mode for mobile browser stability
 if (env.backends?.onnx?.wasm) {
   env.backends.onnx.wasm.numThreads = 1;
-  env.backends.onnx.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.3.3/dist/';
 }
 
 class WhisperEngine {
@@ -24,7 +23,7 @@ class WhisperEngine {
 
     try {
       this.isInitializing = true;
-      console.log('Loading Whisper AI model from CDN...');
+      console.log('Loading Whisper AI model...');
 
       this.transcriber = await pipeline(
         'automatic-speech-recognition',
