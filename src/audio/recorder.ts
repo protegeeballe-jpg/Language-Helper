@@ -34,8 +34,20 @@ export class AudioRecorder {
 
     this.processor.onaudioprocess = (e) => {
       const inputData = e.inputBuffer.getChannelData(0);
-      const chunk = new Float32Array(inputData);
 
+      // RMS Volume Calculation to detect actual speech vs silence/room noise
+      let sumSquares = 0;
+      for (let i = 0; i < inputData.length; i++) {
+        sumSquares += inputData[i] * inputData[i];
+      }
+      const rms = Math.sqrt(sumSquares / inputData.length);
+
+      // If audio is below this volume threshold, it's silence/noise—skip it!
+      if (rms < 0.015) {
+        return; 
+      }
+
+      const chunk = new Float32Array(inputData);
       this.audioQueue.push(chunk);
       this.totalSamples += chunk.length;
 
@@ -56,7 +68,6 @@ export class AudioRecorder {
     this.source.connect(this.processor);
     this.processor.connect(this.audioContext.destination);
 
-    // CRITICAL: Prevent iOS Safari garbage collection by pinning to window
     (window as any).__globalAudioFix = {
       stream: this.stream,
       context: this.audioContext,

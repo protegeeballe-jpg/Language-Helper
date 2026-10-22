@@ -1,8 +1,11 @@
 import { pipeline, env } from '@huggingface/transformers';
 
-// Configure environment for browser execution
 env.allowLocalModels = false;
 env.useBrowserCache = true;
+
+if (env.backends?.onnx?.wasm) {
+  env.backends.onnx.wasm.numThreads = 1;
+}
 
 class WhisperEngine {
   private transcriber: any = null;
@@ -11,7 +14,6 @@ class WhisperEngine {
   async loadModel(onProgress?: (progress: any) => void) {
     if (this.transcriber) return;
     if (this.isInitializing) {
-      // Wait if another call is already loading it
       while (this.isInitializing) {
         await new Promise((resolve) => setTimeout(resolve, 100));
       }
@@ -20,18 +22,14 @@ class WhisperEngine {
 
     try {
       this.isInitializing = true;
-      console.log('Loading Whisper AI model...');
-
-      // Load whisper-tiny optimized for browser web environment
       this.transcriber = await pipeline(
         'automatic-speech-recognition',
         'Xenova/whisper-tiny',
         {
-          device: 'wasm', // Safe, reliable fallback for all devices including iPads
+          device: 'wasm',
           progress_callback: onProgress,
         }
       );
-      console.log('Whisper AI model loaded successfully!');
     } catch (error) {
       console.error('Failed to load Whisper model:', error);
       throw error;
@@ -46,16 +44,30 @@ class WhisperEngine {
     }
 
     try {
-      // Run local speech recognition and translate Tagalog to English
       const output = await this.transcriber(audioBuffer, {
         chunk_length_s: 30,
         stride_length_s: 5,
         language: 'tagalog',
-        task: 'translate', // Translates Tagalog speech directly into written English
+        task: 'translate',
         return_timestamps: false,
+        temperature: 0.0, // Forces deterministic output, killing hallucinations
+        no_speech_threshold: 0.6, // Ignores low-confidence segments
+        compression_ratio_threshold: 2.4, // Drops repetitive loops
       });
 
-      return output?.text ? output.text.trim() : '';
+      const text = output?.text ? output.text.trim() : '';
+      
+      // Safety filter for known Whisper boilerplate hallucinations
+      const lowerText = text.toLowerCase();
+      if (
+        lowerText.includes('thank you for watching') ||
+        lowerText.includes('please subscribe') ||
+        lowerText.includes('subtitles by')
+      ) {
+        return '';
+      }
+
+      return text;
     } catch (error) {
       console.error('Inference error during translation:', error);
       return '';
