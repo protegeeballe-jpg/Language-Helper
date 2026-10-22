@@ -3,19 +3,19 @@ export class AudioRecorder {
   private audioContext: AudioContext | null = null;
   private source: MediaStreamAudioSourceNode | null = null;
   private processor: ScriptProcessorNode | null = null;
-  private onAudioChunk: (buffer: Float32Array) => void;
+  private onAudioChunk: (audioBlob: Blob) => void;
   private activeBuffer: Float32Array[] = [];
   private totalSamples = 0;
   private isSpeaking = false;
   private silenceCounter = 0;
-  private silenceLimit = 6; // ~1.5 seconds of pause to mark end of sentence[cite: 23]
-  private minSpeechSamples = 16000; // Minimum 1 second of speech required[cite: 23]
+  private silenceLimit = 6; // ~1.5 seconds of pause to mark end of sentence
+  private minSpeechSamples = 16000; // Minimum 1 second of speech required
 
-  constructor(onAudioChunk: (buffer: Float32Array) => void) {
+  constructor(onAudioChunk: (audioBlob: Blob) => void) {
     this.onAudioChunk = onAudioChunk;
   }
 
-  // Resamples hardware audio (44.1kHz / 48kHz) precisely to Whisper's required 16kHz[cite: 24]
+  // Resamples hardware audio (44.1kHz / 48kHz) precisely to Whisper's required 16kHz
   private resampleBuffer(buffer: Float32Array, inputSampleRate: number): Float32Array {
     if (inputSampleRate === 16000) return buffer;
     const ratio = inputSampleRate / 16000;
@@ -39,6 +39,46 @@ export class AudioRecorder {
     return result;
   }
 
+  // Encodes 16kHz PCM Float32Array into a standard WAV file Blob for Cloud APIs
+  private encodeWAV(samples: Float32Array, sampleRate: number = 16000): Blob {
+    const buffer = new ArrayBuffer(44 + samples.length * 2);
+    const view = new DataView(buffer);
+
+    // RIFF chunk descriptor
+    this.writeString(view, 0, 'RIFF');
+    view.setUint32(4, 36 + samples.length * 2, true);
+    this.writeString(view, 8, 'WAVE');
+
+    // fmt sub-chunk
+    this.writeString(view, 12, 'fmt ');
+    view.setUint32(16, 16, true); // SubChunk1Size (16 for PCM)
+    view.setUint16(20, 1, true);  // AudioFormat (1 for PCM)
+    view.setUint16(22, 1, true);  // NumChannels (1 for Mono)
+    view.setUint32(24, sampleRate, true); // SampleRate
+    view.setUint32(28, sampleRate * 2, true); // ByteRate
+    view.setUint16(32, 2, true);  // BlockAlign
+    view.setUint16(34, 16, true); // BitsPerSample (16 bits)
+
+    // data sub-chunk
+    this.writeString(view, 36, 'data');
+    view.setUint32(40, samples.length * 2, true);
+
+    // Write PCM samples
+    let offset = 44;
+    for (let i = 0; i < samples.length; i++, offset += 2) {
+      let s = Math.max(-1, Math.min(1, samples[i]));
+      view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+    }
+
+    return new Blob([view], { type: 'audio/wav' });
+  }
+
+  private writeString(view: DataView, offset: number, string: string) {
+    for (let i = 0; i < string.length; i++) {
+      view.setUint8(offset + i, string.charCodeAt(i));
+    }
+  }
+
   async start() {
     this.stream = await navigator.mediaDevices.getUserMedia({
       audio: {
@@ -50,7 +90,7 @@ export class AudioRecorder {
     });
 
     const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
-    this.audioContext = new AudioContextClass(); // Let browser use native rate, we resample dynamically[cite: 24]
+    this.audioContext = new AudioContextClass();
     
     if (this.audioContext.state === 'suspended') {
       await this.audioContext.resume();
@@ -65,7 +105,6 @@ export class AudioRecorder {
     this.processor.onaudioprocess = (e) => {
       const inputData = e.inputBuffer.getChannelData(0);
 
-      // Calculate RMS Volume for Voice Activity Detection[cite: 24]
       let sumSquares = 0;
       for (let i = 0; i < inputData.length; i++) {
         sumSquares += inputData[i] * inputData[i];
@@ -87,7 +126,6 @@ export class AudioRecorder {
         this.activeBuffer.push(resampledChunk);
         this.totalSamples += resampledChunk.length;
 
-        // If silence persists long enough, the sentence is complete[cite: 17, 25]
         if (this.silenceCounter > this.silenceLimit) {
           if (this.totalSamples >= this.minSpeechSamples) {
             const completeSentenceBuffer = new Float32Array(this.totalSamples);
@@ -96,7 +134,9 @@ export class AudioRecorder {
               completeSentenceBuffer.set(c, offset);
               offset += c.length;
             }
-            this.onAudioChunk(completeSentenceBuffer);
+            // Convert PCM buffer into a WAV Blob and pass it upstream
+            const wavBlob = this.encodeWAV(completeSentenceBuffer, 16000);
+            this.onAudioChunk(wavBlob);
           }
           this.activeBuffer = [];
           this.totalSamples = 0;
@@ -109,7 +149,6 @@ export class AudioRecorder {
     this.source.connect(this.processor);
     this.processor.connect(this.audioContext.destination);
 
-    // Prevent iOS Safari garbage collection by pinning to window[cite: 3]
     (window as any)._timekettleAudioFix = {
       stream: this.stream,
       context: this.audioContext,
