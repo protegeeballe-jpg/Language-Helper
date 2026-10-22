@@ -1,61 +1,38 @@
-import { pipeline, env } from '@huggingface/transformers';
+class CloudWhisperEngine {
+  async translateAudio(audioBlob: Blob, previousContext: string = ''): Promise<string> {
+    const apiKey = import.meta.env.VITE_GROQ_API_KEY;
+    if (!apiKey) {
+      throw new Error('VITE_GROQ_API_KEY is missing in your environment variables (.env or Vercel settings).');
+    }
 
-env.allowLocalModels = false;
-env.useBrowserCache = true;
-
-if (env.backends?.onnx?.wasm) {
-  env.backends.onnx.wasm.numThreads = 1;
-}
-
-class WhisperEngine {
-  private transcriber: any = null;
-  private isInitializing = false;
-
-  async loadModel(onProgress?: (progress: any) => void) {
-    if (this.transcriber) return;
-    if (this.isInitializing) {
-      while (this.isInitializing) {
-        await new Promise((resolve) => setTimeout(resolve, 100));
-      }
-      return;
+    const formData = new FormData();
+    formData.append('file', audioBlob, 'speech.wav');
+    formData.append('model', 'whisper-large-v3-turbo');
+    formData.append('response_format', 'json');
+    
+    // Pass previous context so the AI remembers the conversation thread
+    if (previousContext) {
+      formData.append('prompt', previousContext);
     }
 
     try {
-      this.isInitializing = true;
-      this.transcriber = await pipeline(
-        'automatic-speech-recognition',
-        'Xenova/whisper-tiny',
-        {
-          device: 'wasm',
-          progress_callback: onProgress,
-        }
-      );
-    } catch (error) {
-      console.error('Failed to load Whisper model:', error);
-      throw error;
-    } finally {
-      this.isInitializing = false;
-    }
-  }
-
-  async translateAudio(audioBuffer: Float32Array): Promise<string> {
-    if (!this.transcriber) {
-      await this.loadModel();
-    }
-
-    try {
-      const output = await this.transcriber(audioBuffer, {
-        language: 'tagalog',
-        task: 'translate',
-        return_timestamps: false,
-        temperature: 0.0,
-        no_speech_threshold: 0.6,
-        compression_ratio_threshold: 2.4,
+      const response = await fetch('https://api.groq.com/openai/v1/audio/translations', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${apiKey}`,
+        },
+        body: formData,
       });
 
-      let text = output?.text ? output.text.trim() : '';
-      
-      // Strip non-speech bracket tags and boilerplate hallucinations
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error?.message || `Groq API error: ${response.statusText}`);
+      }
+
+      const data = await response.json();
+      let text = data?.text ? data.text.trim() : '';
+
+      // Strip non-speech bracket tags ([laughter], [music], etc.) and boilerplate hallucinations
       text = text.replace(/\[.*?\]|\(.*?\)/g, '').trim();
       const lower = text.toLowerCase();
 
@@ -70,10 +47,18 @@ class WhisperEngine {
 
       return text;
     } catch (error) {
-      console.error('Inference error:', error);
-      return '';
+      console.error('Groq cloud inference error:', error);
+      throw error;
     }
+  }
+
+  // Compatibility wrapper so existing App.tsx initialization calls succeed instantly
+  async loadModel(onProgress?: (progress: any) => void) {
+    if (onProgress) {
+      onProgress({ status: 'downloading', progress: 100 });
+    }
+    return Promise.resolve();
   }
 }
 
-export const whisperEngine = new WhisperEngine();
+export const whisperEngine = new CloudWhisperEngine();
