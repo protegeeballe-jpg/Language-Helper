@@ -1,4 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { whisperEngine } from './whisper/engine';
+import { AudioRecorder } from './audio/recorder';
 
 interface Entry {
   id: string;
@@ -10,45 +12,70 @@ export default function App() {
   const [isListening, setIsListening] = useState(false);
   const [transcripts, setTranscripts] = useState<Entry[]>([]);
   const [hasStarted, setHasStarted] = useState(false);
+  const [statusMessage, setStatusMessage] = useState('Tap Anywhere to Start');
+  const recorderRef = useRef<AudioRecorder | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [transcripts]);
 
-  // Function to start capturing audio automatically
-  const startListening = async () => {
+  const handleAudioChunk = async (audioBuffer: Float32Array) => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      setIsListening(true);
-      setHasStarted(true);
-      
-      // Temporary simulation for live testing until we plug in Whisper AI
-      // This adds a sample translated line to prove the live feed is working
-      setTimeout(() => {
+      setStatusMessage('Translating Tagalog...');
+      const translation = await whisperEngine.translateAudio(audioBuffer);
+
+      if (translation && translation.trim().length > 0) {
         setTranscripts((prev) => [
           ...prev,
           {
             id: Date.now().toString(),
-            text: "Magandang umaga po sa inyong lahat (Translated: Good morning to all of you)",
+            text: translation,
             time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
           },
         ]);
-      }, 2000);
-
-    } catch (err) {
-      console.error("Microphone access denied:", err);
-      alert("Please allow microphone access so the app can translate ambient conversations.");
+      }
+      setStatusMessage('Listening for Tagalog...');
+    } catch (error) {
+      console.error('Translation error:', error);
+      setStatusMessage('Listening...');
     }
+  };
+
+  const startListening = async () => {
+    try {
+      setHasStarted(true);
+      setStatusMessage('Initializing Local AI Engine...');
+
+      await whisperEngine.loadModel();
+
+      const recorder = new AudioRecorder(handleAudioChunk);
+      await recorder.start();
+      recorderRef.current = recorder;
+
+      setIsListening(true);
+      setStatusMessage('Listening for Tagalog...');
+    } catch (err) {
+      console.error('Microphone access denied or error:', err);
+      setStatusMessage('Microphone access required');
+      alert('Please allow microphone access so the app can hear nearby conversations.');
+    }
+  };
+
+  const stopListening = () => {
+    if (recorderRef.current) {
+      recorderRef.current.stop();
+      recorderRef.current = null;
+    }
+    setIsListening(false);
+    setStatusMessage('Paused');
   };
 
   return (
     <div style={styles.container} onClick={!hasStarted ? startListening : undefined}>
       <header style={styles.header}>
         <h1 style={styles.title}>Language Helper</h1>
-        <span style={styles.badge}>
-          {isListening ? 'Listening & Translating...' : 'Tap Anywhere to Start'}
-        </span>
+        <span style={styles.badge}>{statusMessage}</span>
       </header>
 
       <main style={styles.feed}>
@@ -59,10 +86,10 @@ export default function App() {
                 <p style={{ fontSize: '1.25rem', fontWeight: 'bold', marginBottom: '1rem' }}>
                   Welcome to Language Helper 🕊️
                 </p>
-                <p>Tap anywhere on the screen to activate live Tagalog-to-English translation.</p>
+                <p>Tap anywhere on the screen to start live local Tagalog-to-English translation.</p>
               </div>
             ) : (
-              <p>Listening for conversations... Spoken Tagalog will appear here translated in real time.</p>
+              <p>Listening... Speak Tagalog into your mic, and the English translation will appear here!</p>
             )}
           </div>
         ) : (
@@ -81,14 +108,14 @@ export default function App() {
           onClick={(e) => {
             e.stopPropagation();
             if (!isListening) startListening();
-            else setIsListening(false);
+            else stopListening();
           }}
           style={{
             ...styles.actionButton,
             backgroundColor: isListening ? '#dc2626' : '#2563eb',
           }}
         >
-          {isListening ? 'Pause Listening' : 'Start Listening'}
+          {isListening ? 'Pause' : 'Start Listening'}
         </button>
       </footer>
     </div>
