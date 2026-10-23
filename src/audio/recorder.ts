@@ -109,6 +109,20 @@ export class AudioRecorder {
         sumSquares += inputData[i] * inputData[i];
       }
       const rms = Math.sqrt(sumSquares / inputData.length);
+
+      this.processor.onaudioprocess = (e) => {
+      const inputData = e.inputBuffer.getChannelData(0);
+
+      let sumSquares = 0;
+      for (let i = 0; i < inputData.length; i++) {
+        sumSquares += inputData[i] * inputData[i];
+      }
+      const rms = Math.sqrt(sumSquares / inputData.length);
+      
+      // 🔎 TEMP DIAGNOSTIC LOG: Watch this in your F12 Console while speaking
+      console.log("Mic RMS volume level:", rms.toFixed(4));
+
+      const isVoice = rms > 0.004;
       
       // Lowered threshold to pick up normal speaking voices reliably
       const isVoice = rms > 0.004;
