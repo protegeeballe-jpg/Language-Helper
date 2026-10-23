@@ -74,14 +74,10 @@ export class AudioRecorder {
     }
   }
 
-  async start() {
+async start() {
+    // Simplified constraint to force connection to the true default microphone
     this.stream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        channelCount: 1,
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true,
-      },
+      audio: true,
     });
 
     const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
@@ -110,8 +106,10 @@ export class AudioRecorder {
       }
       const rms = Math.sqrt(sumSquares / inputData.length);
       
-      // Diagnostic log: Watch this in your F12 Console while speaking
-      console.log("Mic RMS volume level:", rms.toFixed(4));
+      // Log only when sound is detected to keep console clean, or view live level
+      if (rms > 0.0001) {
+        console.log("🎤 Active Mic RMS volume level:", rms.toFixed(4));
+      }
 
       const isVoice = rms > 0.004;
 
