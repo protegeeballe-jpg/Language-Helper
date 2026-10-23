@@ -10,9 +10,6 @@ export const whisperEngine = {
     const formData = new FormData();
     formData.append('file', audioBlob, 'audio.webm');
     formData.append('model', 'whisper-large-v3'); 
-    
-    // 🌟 THE MAGIC FIX: Force Whisper to recognize Tagalog audio!
-    formData.append('language', 'tl'); 
     formData.append('temperature', '0');
 
     // Prevent feeding single-word hallucinations (like "you") back into the prompt loop
