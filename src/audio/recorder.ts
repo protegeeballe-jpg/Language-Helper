@@ -10,7 +10,7 @@ export class AudioRecorder {
   private isSpeaking = false;
   private silenceCounter = 0;
   private silenceLimit = 5; // Quick pause detection
-  private minSpeechSamples = 4000; // Lowered to ~0.25s so short words work instantly!
+  private minSpeechSamples = 4000; // ~0.25s so short words work instantly
 
   constructor(onAudioChunk: (audioBlob: Blob) => void) {
     this.onAudioChunk = onAudioChunk;
@@ -109,22 +109,10 @@ export class AudioRecorder {
         sumSquares += inputData[i] * inputData[i];
       }
       const rms = Math.sqrt(sumSquares / inputData.length);
-
-      this.processor.onaudioprocess = (e) => {
-      const inputData = e.inputBuffer.getChannelData(0);
-
-      let sumSquares = 0;
-      for (let i = 0; i < inputData.length; i++) {
-        sumSquares += inputData[i] * inputData[i];
-      }
-      const rms = Math.sqrt(sumSquares / inputData.length);
       
-      // 🔎 TEMP DIAGNOSTIC LOG: Watch this in your F12 Console while speaking
+      // Diagnostic log: Watch this in your F12 Console while speaking
       console.log("Mic RMS volume level:", rms.toFixed(4));
 
-      const isVoice = rms > 0.004;
-      
-      // Lowered threshold to pick up normal speaking voices reliably
       const isVoice = rms > 0.004;
 
       if (isVoice) {
