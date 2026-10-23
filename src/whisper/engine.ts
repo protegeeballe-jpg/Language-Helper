@@ -8,14 +8,15 @@ export const whisperEngine = {
     }
 
     const formData = new FormData();
-    // Wrap the blob as a file named audio.webm
     formData.append('file', audioBlob, 'audio.webm');
-    
-    // IMPORTANT: Must be whisper-large-v3 for translation support on Groq!
     formData.append('model', 'whisper-large-v3'); 
+    
+    // 🌟 THE MAGIC FIX: Force Whisper to recognize Tagalog audio!
+    formData.append('language', 'tl'); 
     formData.append('temperature', '0');
 
-    if (previousContext) {
+    // Prevent feeding single-word hallucinations (like "you") back into the prompt loop
+    if (previousContext && previousContext.split(' ').length > 2) {
       formData.append('prompt', previousContext);
     }
 
@@ -36,7 +37,15 @@ export const whisperEngine = {
       }
 
       const data = await response.json();
-      return data.text || '';
+      const text = (data.text || '').trim();
+
+      // Filter out common Whisper hallucination artifacts
+      const lowerText = text.toLowerCase();
+      if (lowerText === 'you' || lowerText === 'thank you.' || lowerText === 'thanks for watching.') {
+        return '';
+      }
+
+      return text;
     } catch (error) {
       console.error('Groq cloud inference error:', error);
       throw error;
