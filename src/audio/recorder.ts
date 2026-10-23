@@ -3,19 +3,19 @@ export class AudioRecorder {
   private audioContext: AudioContext | null = null;
   private source: MediaStreamAudioSourceNode | null = null;
   private processor: ScriptProcessorNode | null = null;
+  private gainNode: GainNode | null = null;
   private onAudioChunk: (audioBlob: Blob) => void;
   private activeBuffer: Float32Array[] = [];
   private totalSamples = 0;
   private isSpeaking = false;
   private silenceCounter = 0;
-  private silenceLimit = 6; // ~1.5 seconds of pause to mark end of sentence
-  private minSpeechSamples = 16000; // Minimum 1 second of speech required
+  private silenceLimit = 5; // Quick pause detection
+  private minSpeechSamples = 4000; // Lowered to ~0.25s so short words work instantly!
 
   constructor(onAudioChunk: (audioBlob: Blob) => void) {
     this.onAudioChunk = onAudioChunk;
   }
 
-  // Resamples hardware audio (44.1kHz / 48kHz) precisely to Whisper's required 16kHz
   private resampleBuffer(buffer: Float32Array, inputSampleRate: number): Float32Array {
     if (inputSampleRate === 16000) return buffer;
     const ratio = inputSampleRate / 16000;
@@ -39,31 +39,26 @@ export class AudioRecorder {
     return result;
   }
 
-  // Encodes 16kHz PCM Float32Array into a standard WAV file Blob for Cloud APIs
   private encodeWAV(samples: Float32Array, sampleRate: number = 16000): Blob {
     const buffer = new ArrayBuffer(44 + samples.length * 2);
     const view = new DataView(buffer);
 
-    // RIFF chunk descriptor
     this.writeString(view, 0, 'RIFF');
     view.setUint32(4, 36 + samples.length * 2, true);
     this.writeString(view, 8, 'WAVE');
 
-    // fmt sub-chunk
     this.writeString(view, 12, 'fmt ');
-    view.setUint32(16, 16, true); // SubChunk1Size (16 for PCM)
-    view.setUint16(20, 1, true);  // AudioFormat (1 for PCM)
-    view.setUint16(22, 1, true);  // NumChannels (1 for Mono)
-    view.setUint32(24, sampleRate, true); // SampleRate
-    view.setUint32(28, sampleRate * 2, true); // ByteRate
-    view.setUint16(32, 2, true);  // BlockAlign
-    view.setUint16(34, 16, true); // BitsPerSample (16 bits)
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true);
+    view.setUint16(22, 1, true);
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, sampleRate * 2, true);
+    view.setUint16(32, 2, true);
+    view.setUint16(34, 16, true);
 
-    // data sub-chunk
     this.writeString(view, 36, 'data');
     view.setUint32(40, samples.length * 2, true);
 
-    // Write PCM samples
     let offset = 44;
     for (let i = 0; i < samples.length; i++, offset += 2) {
       let s = Math.max(-1, Math.min(1, samples[i]));
@@ -101,6 +96,10 @@ export class AudioRecorder {
 
     this.source = this.audioContext.createMediaStreamSource(this.stream);
     this.processor = this.audioContext.createScriptProcessor(4096, 1, 1);
+    
+    // Create a zero-gain node to prevent microphone feedback loop into speakers
+    this.gainNode = this.audioContext.createGain();
+    this.gainNode.gain.value = 0;
 
     this.processor.onaudioprocess = (e) => {
       const inputData = e.inputBuffer.getChannelData(0);
@@ -110,7 +109,9 @@ export class AudioRecorder {
         sumSquares += inputData[i] * inputData[i];
       }
       const rms = Math.sqrt(sumSquares / inputData.length);
-      const isVoice = rms > 0.012;
+      
+      // Lowered threshold to pick up normal speaking voices reliably
+      const isVoice = rms > 0.004;
 
       if (isVoice) {
         if (!this.isSpeaking) {
@@ -134,7 +135,6 @@ export class AudioRecorder {
               completeSentenceBuffer.set(c, offset);
               offset += c.length;
             }
-            // Convert PCM buffer into a WAV Blob and pass it upstream
             const wavBlob = this.encodeWAV(completeSentenceBuffer, 16000);
             this.onAudioChunk(wavBlob);
           }
@@ -147,19 +147,15 @@ export class AudioRecorder {
     };
 
     this.source.connect(this.processor);
-    this.processor.connect(this.audioContext.destination);
-
-    (window as any)._timekettleAudioFix = {
-      stream: this.stream,
-      context: this.audioContext,
-      processor: this.processor,
-    };
+    this.processor.connect(this.gainNode);
+    this.gainNode.connect(this.audioContext.destination);
   }
 
   stop() {
     if (this.processor && this.audioContext) {
       this.processor.disconnect();
       this.source?.disconnect();
+      this.gainNode?.disconnect();
     }
     if (this.stream) {
       this.stream.getTracks().forEach((track) => track.stop());
@@ -172,6 +168,5 @@ export class AudioRecorder {
     this.activeBuffer = [];
     this.totalSamples = 0;
     this.isSpeaking = false;
-    delete (window as any)._timekettleAudioFix;
   }
 }
